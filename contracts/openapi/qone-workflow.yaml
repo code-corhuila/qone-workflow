@@ -1,0 +1,160 @@
+openapi: 3.0.3
+info:
+  title: qone-workflow
+  version: 2.0.0
+  description: |
+    The `enroll-student` saga of Qampus (ADR-008, Annex E): the only way an enrollment is
+    written. Operations WF-01..WF-03 of `../../endpoint-catalog.md`. Steps, in order, each
+    with its compensation: `check-tuition` (billing BI-06), `check-eligibility` (enrollment
+    EN-04), `reserve-seat` (catalog CA-10, undo CA-11), `confirm-enrollment` (enrollment EN-05,
+    undo EN-06), `commit-seat` (catalog CA-12, last, no undo). Participants are called with the
+    workflow's service token and `Idempotency-Key: <sagaId>:<step>`; the caller's
+    `X-Correlation-Id` travels to every participant. State lives in Redis and is persisted
+    after every step, so a restart resumes or compensates. Shared components: `./_shared.yaml`.
+
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Through qone-api-gateway (`/api/v1/sagas` routes to qone-workflow)
+
+security:
+  - bearerAuth: []
+
+paths:
+  /sagas/health:
+    get:
+      summary: Liveness of the workflow and of its state store (WF-01)
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: './_shared.yaml#/components/schemas/Health' }
+
+  /sagas/enroll-student:
+    post:
+      summary: Start the enrollment saga for a student and a section (WF-02)
+      description: |
+        A STUDENT starts it for themselves (`studentId` must equal the token's `sub`, else
+        `403`) with `origin: UI`; `qone-advisor-api` starts it with its SERVICE token,
+        `origin: AGENT` and the `confirmationId` of the confirmed plan (`INV-ENR-005`). The
+        saga runs synchronously within the request budget (30 s): the `201` body already carries
+        the final state in the normal case; a saga still `RUNNING` is polled with WF-03.
+        Repeating the same `Idempotency-Key` returns the same saga with `200` and runs no step
+        again (Annex E). A gate rejection ends in `COMPENSATED` with `failedStep` and `reason`
+        (D-01); a failed compensation ends in `FAILED` and needs a person.
+      parameters:
+        - $ref: './_shared.yaml#/components/parameters/IdempotencyKey'
+        - $ref: './_shared.yaml#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StartEnrollStudent' }
+      responses:
+        '201':
+          description: Saga created (and, normally, already finished)
+          headers:
+            Location: { $ref: './_shared.yaml#/components/headers/Location' }
+            X-Correlation-Id: { $ref: './_shared.yaml#/components/headers/XCorrelationId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Saga' }
+        '200':
+          description: Same `Idempotency-Key` - the saga started the first time, in its current state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Saga' }
+        '400': { $ref: './_shared.yaml#/components/responses/BadRequest' }
+        '401': { $ref: './_shared.yaml#/components/responses/Unauthorized' }
+        '403': { $ref: './_shared.yaml#/components/responses/Forbidden' }
+
+  /sagas/{id}:
+    get:
+      summary: State of a saga (WF-03)
+      description: The student who started it, an ADMIN or a SERVICE token; another student's saga is `404` (D-03).
+      parameters:
+        - $ref: './_shared.yaml#/components/parameters/Id'
+      responses:
+        '200':
+          description: The saga
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Saga' }
+        '400': { $ref: './_shared.yaml#/components/responses/BadRequest' }
+        '401': { $ref: './_shared.yaml#/components/responses/Unauthorized' }
+        '404': { $ref: './_shared.yaml#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    bearerAuth: { $ref: './_shared.yaml#/components/securitySchemes/bearerAuth' }
+
+  schemas:
+    StartEnrollStudent:
+      type: object
+      required: [studentId, sectionId, origin]
+      properties:
+        studentId: { $ref: './_shared.yaml#/components/schemas/UUID' }
+        sectionId: { $ref: './_shared.yaml#/components/schemas/UUID' }
+        origin: { type: string, enum: [UI, AGENT] }
+        confirmationId:
+          description: Required when `origin` is `AGENT`
+          allOf: [{ $ref: './_shared.yaml#/components/schemas/UUID' }]
+
+    SagaStep:
+      type: string
+      enum: [check-tuition, check-eligibility, reserve-seat, confirm-enrollment, commit-seat]
+
+    SagaStatus:
+      type: string
+      description: '`RUNNING` -> `COMPLETED` | `COMPENSATED` (a gate rejected, every done step undone) | `FAILED` (a compensation failed; a person decides)'
+      enum: [RUNNING, COMPLETED, COMPENSATED, FAILED]
+
+    Saga:
+      type: object
+      required: [id, type, studentId, sectionId, origin, status, completedSteps, createdAt, updatedAt]
+      properties:
+        id: { $ref: './_shared.yaml#/components/schemas/UUID' }
+        type: { type: string, enum: [enroll-student] }
+        studentId: { $ref: './_shared.yaml#/components/schemas/UUID' }
+        sectionId: { $ref: './_shared.yaml#/components/schemas/UUID' }
+        origin: { type: string, enum: [UI, AGENT] }
+        confirmationId:
+          nullable: true
+          allOf: [{ $ref: './_shared.yaml#/components/schemas/UUID' }]
+        status: { $ref: '#/components/schemas/SagaStatus' }
+        completedSteps:
+          type: array
+          items: { $ref: '#/components/schemas/SagaStep' }
+        failedStep:
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/SagaStep' }]
+        reason:
+          type: string
+          nullable: true
+          description: The domain reason of a `COMPENSATED` saga; never a server name or an upstream code
+          enum: [TUITION_UNPAID, PREREQ_MISSING, NO_SEATS, SCHEDULE_CONFLICT, DUPLICATE, null]
+        reservationId:
+          nullable: true
+          allOf: [{ $ref: './_shared.yaml#/components/schemas/UUID' }]
+        enrollmentId:
+          nullable: true
+          description: Set when `confirm-enrollment` recorded the attempt (confirmed or rejected)
+          allOf: [{ $ref: './_shared.yaml#/components/schemas/UUID' }]
+        createdAt: { $ref: './_shared.yaml#/components/schemas/DateTime' }
+        updatedAt: { $ref: './_shared.yaml#/components/schemas/DateTime' }
+      example:
+        id: 35920dc9-bd55-41a0-8e41-5832377383e5
+        type: enroll-student
+        studentId: 11111111-1111-4111-8111-111111111111
+        sectionId: 22222222-2222-4222-8222-222222222222
+        origin: UI
+        confirmationId: null
+        status: COMPENSATED
+        completedSteps: [check-tuition, check-eligibility]
+        failedStep: reserve-seat
+        reason: NO_SEATS
+        reservationId: null
+        enrollmentId: 33333333-3333-4333-8333-333333333333
+        createdAt: '2026-10-07T14:03:21Z'
+        updatedAt: '2026-10-07T14:03:22Z'
