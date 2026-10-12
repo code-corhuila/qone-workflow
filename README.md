@@ -34,8 +34,20 @@ and the caller's `X-Correlation-Id`.
 python -m venv .venv && . .venv/bin/activate      # Windows: .venv\\Scripts\\activate
 pip install -e ".[dev]"
 ruff check .
-python -m pytest
+python -m pytest                                   # add TEST_REDIS_URL=redis://localhost:6379/0 for the Redis tests
+cp .env.example .env                               # REDIS_URL, JWT_PUBLIC_KEY, SERVICE_TOKEN, participant URLs
+python -m apps.api                                 # http://localhost:8000/api/v1/sagas/health
 ```
+
+Without `REDIS_URL` the sagas live in memory and a restart loses them (development only; the
+log says so). At start the service resumes every saga a restart left `RUNNING`: the idempotent
+step keys make a repeated step harmless. Health answers `503` when Redis does not.
+
+Container image and compose (`deploy/`, Annex G): `docker build -f deploy/Dockerfile -t
+qone-workflow:dev .`, then `deploy/smoke.sh`; `deploy/compose.yml` is what `qone-infra` includes,
+next to the `redis:7` service it composes with `appendonly yes` (ADR-008). Limits: three attempts
+per call with full jitter, 3 s to connect and 10 s to answer per call, keep-alive 60 s, graceful
+shutdown 20 s; the request budget of 30 s is the gateway's.
 
 ## Branching
 
