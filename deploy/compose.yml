@@ -1,0 +1,32 @@
+# The workflow as qone-infra composes it (Annex G): expose only, reached through the gateway at
+# /api/v1/sagas. Its saga state lives in the Redis that qone-infra composes (ADR-008); the
+# participants are resolved by name on the platform network. Every value comes from .env.
+services:
+  qone-workflow:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: qone-workflow:${IMAGE_TAG:-dev}
+    container_name: qone-workflow
+    restart: unless-stopped
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?JWT_PUBLIC_KEY is required}
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN is required}
+      BILLING_API_URL: http://qone-billing-api:8000
+      ENROLLMENT_API_URL: http://qone-enrollment-api:8000
+      CATALOG_API_URL: http://qone-catalog-api:8000
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    expose:
+      - "8000"
+    networks:
+      - platform
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/sagas/health', timeout=2).status == 200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+networks:
+  platform:
+    external: true
