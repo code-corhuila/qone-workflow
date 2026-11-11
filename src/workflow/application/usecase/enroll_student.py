@@ -1,8 +1,10 @@
 """The orchestrator of the enroll-student saga (Annex E): runs the steps in order, persists the
 saga after every step, and when a step fails undoes the done steps in reverse. A rejected gate
 ends COMPENSATED with its reason, and the enrollment domain records the rejected attempt (D-01);
+a participant that does not answer ends COMPENSATED with PARTICIPANT_UNAVAILABLE (HU-RES-001);
 a failed undo ends FAILED for a person to decide. Every call carries `<sagaId>:<step>` as its
 Idempotency-Key and the caller's correlation id, so a resumed or repeated step never acts twice.
+Every saga that ends is reported to the metrics port with its outcome and duration (HU-OBS-001).
 
 Who may start it (07-api/authentication.md): a STUDENT for themselves with origin UI; the
 advisor's SERVICE token for a student with origin AGENT and the confirmation (INV-ENR-005).
@@ -14,6 +16,7 @@ from uuid import UUID
 
 from workflow.application.errors import Forbidden, InvalidInput, NotFound
 from workflow.application.port.inbound.sagas import Caller, Role, SagaUseCases, Started, StartEnrollStudent
+from workflow.application.port.outbound.metrics import NoMetrics, SagaMetrics
 from workflow.application.port.outbound.participants import (
     Billing,
     Call,
@@ -25,7 +28,7 @@ from workflow.application.port.outbound.participants import (
     SagaStore,
     Unavailable,
 )
-from workflow.domain.saga.saga import RECORDABLE, Origin, Saga, SagaStatus, Step
+from workflow.domain.saga.saga import RECORDABLE, Origin, Reason, Saga, SagaStatus, Step
 
 log = logging.getLogger("workflow.saga")
 KEY_MIN, KEY_MAX = 8, 128
@@ -40,6 +43,7 @@ class EnrollStudentSaga(SagaUseCases):
         catalog: Catalog,
         clock: Clock,
         ids: IdGenerator,
+        metrics: SagaMetrics | None = None,
     ) -> None:
         self._store = store
         self._billing = billing
@@ -47,6 +51,7 @@ class EnrollStudentSaga(SagaUseCases):
         self._catalog = catalog
         self._clock = clock
         self._ids = ids
+        self._metrics = metrics or NoMetrics()
 
     def start(self, caller: Caller, command: StartEnrollStudent, idempotency_key: str, correlation_id: str) -> Started:
         if not KEY_MIN <= len(idempotency_key or "") <= KEY_MAX:
@@ -106,13 +111,16 @@ class EnrollStudentSaga(SagaUseCases):
                 log.warning(
                     "step failed", extra={"traceId": saga.correlation_id, "step": step.value, "detail": str(error)}
                 )
-                saga = saga.step_failed(step, None, str(error), self._clock.now())
+                saga = saga.step_failed(step, Reason.PARTICIPANT_UNAVAILABLE, str(error), self._clock.now())
             self._store.save(saga)
         if saga.is_compensating:
             saga = self._compensate(saga)
         if saga.status is SagaStatus.RUNNING:
             saga = saga.finish(self._clock.now())
             self._store.save(saga)
+        self._metrics.saga_ended(
+            saga.type, saga.status.value.lower(), (saga.updated_at - saga.created_at).total_seconds()
+        )
         return saga
 
     def _do(self, step: Step, saga: Saga) -> Saga:

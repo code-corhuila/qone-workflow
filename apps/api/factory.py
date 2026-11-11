@@ -8,8 +8,11 @@ import os
 import sys
 import threading
 
+from prometheus_client import CollectorRegistry
+
 from workflow.adapter.inbound.http.app import create_app
 from workflow.adapter.inbound.http.auth import TokenVerifier
+from workflow.adapter.outbound.metrics.prometheus import PrometheusSagaMetrics
 from workflow.adapter.outbound.participants.http import HttpBilling, HttpCatalog, HttpClient, HttpEnrollment
 from workflow.adapter.outbound.runtime import SystemClock, Uuid4Generator
 from workflow.adapter.outbound.state.memory import InMemorySagaStore
@@ -69,6 +72,7 @@ def build_app(settings: Settings | None = None):
         store, ping, readiness = InMemorySagaStore(), lambda: True, CheckReadiness([])
         log.warning("saga store: in memory (REDIS_URL not set); a restart loses every saga; development only")
     http = HttpClient(settings.service_token, attempts=CALL_ATTEMPTS)
+    registry = CollectorRegistry()
     saga = EnrollStudentSaga(
         store,
         HttpBilling(http, settings.billing_url),
@@ -76,9 +80,12 @@ def build_app(settings: Settings | None = None):
         HttpCatalog(http, settings.catalog_url),
         SystemClock(),
         Uuid4Generator(),
+        PrometheusSagaMetrics(registry),
     )
     threading.Thread(target=_resume, args=(saga, log), daemon=True).start()
-    return create_app(saga, TokenVerifier(settings.public_key), store_ping=ping, readiness=readiness)
+    return create_app(
+        saga, TokenVerifier(settings.public_key), store_ping=ping, registry=registry, readiness=readiness
+    )
 
 
 def _resume(saga: EnrollStudentSaga, log: logging.Logger) -> None:
