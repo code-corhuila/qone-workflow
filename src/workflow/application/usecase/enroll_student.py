@@ -10,7 +10,8 @@ The start's Idempotency-Key belongs to its caller (#55): the same key from anoth
 that caller's own saga, and a replay with another body is refused (KeyReused) and runs nothing.
 
 Who may start it (07-api/authentication.md): a STUDENT for themselves with origin UI; the
-advisor's SERVICE token for a student with origin AGENT and the confirmation (INV-ENR-005).
+advisor's SERVICE token for a student with origin AGENT and the confirmation (INV-ENR-005). The
+advisor is the only service that may (D-08, #55): any other SERVICE subject gets Forbidden.
 Who may read it: the student who started it, an ADMIN or a SERVICE; another student gets 404.
 """
 
@@ -38,6 +39,7 @@ from workflow.domain.saga.saga import RECORDABLE, Origin, Reason, Saga, SagaStat
 
 log = logging.getLogger("workflow.saga")
 KEY_MIN, KEY_MAX = 8, 128
+ADVISOR = "qone-advisor-api"  # D-08: the only service whose agent may start a saga for a student
 
 
 class EnrollStudentSaga(SagaUseCases):
@@ -68,6 +70,8 @@ class EnrollStudentSaga(SagaUseCases):
             if command.origin is not Origin.UI or command.confirmation_id is not None:
                 raise InvalidInput("origin", "a student starts the saga with origin UI and no confirmationId")
         elif caller.role is Role.SERVICE:
+            if caller.subject != ADVISOR:
+                raise Forbidden("D-08: only qone-advisor-api starts the saga for a student")
             if command.origin is not Origin.AGENT:
                 raise InvalidInput("origin", "a service starts the saga with origin AGENT")
             if command.confirmation_id is None:

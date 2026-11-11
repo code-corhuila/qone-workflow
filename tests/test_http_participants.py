@@ -45,7 +45,10 @@ def client(recorder, attempts=3):
 
 def test_the_tuition_gate():
     for status, body, rejected in [
-        (200, {"status": "PAID"}, False),
+        (200, {"status": "PAID", "providerReference": "SIM-7F3A9C21"}, False),
+        (200, {"status": "PAID"}, True),  # #55: PAID without the provider's evidence is not paid
+        (200, {"status": "PAID", "providerReference": None}, True),
+        (200, {"status": "PAID", "providerReference": ""}, True),
         (200, {"status": "ISSUED"}, True),
         (404, {"error": "NOT_FOUND"}, True),
     ]:
