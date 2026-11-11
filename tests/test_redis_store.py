@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from workflow.adapter.outbound.state.redis import from_doc, to_doc
+from workflow.application.port.outbound.participants import Claim, StartKey
 from workflow.domain.saga.saga import Origin, Reason, Saga, SagaStatus, Step
 
 NOW = datetime(2026, 10, 13, 12, 0, tzinfo=UTC)
@@ -40,11 +41,28 @@ def test_the_store_against_redis():
     store = RedisSagaStore(redis.Redis.from_url(URL))
     assert store.ping()
     saga = a_saga()
-    key = f"it-{uuid4()}"
-    assert store.create(saga, key) == (saga, True)
+    key = StartKey(str(saga.student_id), f"it-{uuid4()}", "a" * 64)
+    assert store.create(saga, key) == Claim(saga, True, key.fingerprint)
     other = Saga.start(uuid4(), uuid4(), uuid4(), Origin.UI, None, "corr-2", NOW)
-    assert store.create(other, key) == (saga, False), "the first start wins"
+    again = StartKey(key.owner, key.key, "b" * 64)
+    assert store.create(other, again) == Claim(saga, False, key.fingerprint), "the first start wins"
     assert store.find(saga.id) == saga and saga.id in {s.id for s in store.running()}
     done = saga.finish(NOW)
     store.save(done)
     assert store.find(saga.id).status is SagaStatus.COMPENSATED and saga.id not in {s.id for s in store.running()}
+
+
+@pytest.mark.skipif(not URL, reason="TEST_REDIS_URL not set")
+def test_the_key_belongs_to_its_owner_in_redis():
+    """#55: the same Idempotency-Key from another caller starts that caller's own saga."""
+    import redis
+
+    from workflow.adapter.outbound.state.redis import RedisSagaStore
+
+    store = RedisSagaStore(redis.Redis.from_url(URL))
+    shared = f"it-{uuid4()}"
+    lauras = Saga.start(uuid4(), uuid4(), uuid4(), Origin.UI, None, "corr-laura", NOW)
+    santiagos = Saga.start(uuid4(), uuid4(), lauras.section_id, Origin.UI, None, "corr-santiago", NOW)
+    assert store.create(lauras, StartKey(str(lauras.student_id), shared, "f" * 64)).created
+    claim = store.create(santiagos, StartKey(str(santiagos.student_id), shared, "f" * 64))
+    assert claim.created and claim.saga == santiagos, "never Laura's saga"
