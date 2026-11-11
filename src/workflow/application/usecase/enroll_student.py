@@ -1,19 +1,28 @@
 """The orchestrator of the enroll-student saga (Annex E): runs the steps in order, persists the
 saga after every step, and when a step fails undoes the done steps in reverse. A rejected gate
 ends COMPENSATED with its reason, and the enrollment domain records the rejected attempt (D-01);
+a participant that does not answer ends COMPENSATED with PARTICIPANT_UNAVAILABLE (HU-RES-001);
 a failed undo ends FAILED for a person to decide. Every call carries `<sagaId>:<step>` as its
 Idempotency-Key and the caller's correlation id, so a resumed or repeated step never acts twice.
+Every saga that ends is reported to the metrics port with its outcome and duration (HU-OBS-001).
+
+The start's Idempotency-Key belongs to its caller (#55): the same key from another caller starts
+that caller's own saga, and a replay with another body is refused (KeyReused) and runs nothing.
 
 Who may start it (07-api/authentication.md): a STUDENT for themselves with origin UI; the
-advisor's SERVICE token for a student with origin AGENT and the confirmation (INV-ENR-005).
+advisor's SERVICE token for a student with origin AGENT and the confirmation (INV-ENR-005). The
+advisor is the only service that may (D-08, #55): any other SERVICE subject gets Forbidden.
 Who may read it: the student who started it, an ADMIN or a SERVICE; another student gets 404.
 """
 
+import hashlib
+import json
 import logging
 from uuid import UUID
 
-from workflow.application.errors import Forbidden, InvalidInput, NotFound
+from workflow.application.errors import Forbidden, InvalidInput, KeyReused, NotFound
 from workflow.application.port.inbound.sagas import Caller, Role, SagaUseCases, Started, StartEnrollStudent
+from workflow.application.port.outbound.metrics import NoMetrics, SagaMetrics
 from workflow.application.port.outbound.participants import (
     Billing,
     Call,
@@ -23,12 +32,14 @@ from workflow.application.port.outbound.participants import (
     IdGenerator,
     Rejected,
     SagaStore,
+    StartKey,
     Unavailable,
 )
-from workflow.domain.saga.saga import RECORDABLE, Origin, Saga, SagaStatus, Step
+from workflow.domain.saga.saga import RECORDABLE, Origin, Reason, Saga, SagaStatus, Step
 
 log = logging.getLogger("workflow.saga")
 KEY_MIN, KEY_MAX = 8, 128
+ADVISOR = "qone-advisor-api"  # D-08: the only service whose agent may start a saga for a student
 
 
 class EnrollStudentSaga(SagaUseCases):
@@ -40,6 +51,7 @@ class EnrollStudentSaga(SagaUseCases):
         catalog: Catalog,
         clock: Clock,
         ids: IdGenerator,
+        metrics: SagaMetrics | None = None,
     ) -> None:
         self._store = store
         self._billing = billing
@@ -47,6 +59,7 @@ class EnrollStudentSaga(SagaUseCases):
         self._catalog = catalog
         self._clock = clock
         self._ids = ids
+        self._metrics = metrics or NoMetrics()
 
     def start(self, caller: Caller, command: StartEnrollStudent, idempotency_key: str, correlation_id: str) -> Started:
         if not KEY_MIN <= len(idempotency_key or "") <= KEY_MAX:
@@ -57,6 +70,8 @@ class EnrollStudentSaga(SagaUseCases):
             if command.origin is not Origin.UI or command.confirmation_id is not None:
                 raise InvalidInput("origin", "a student starts the saga with origin UI and no confirmationId")
         elif caller.role is Role.SERVICE:
+            if caller.subject != ADVISOR:
+                raise Forbidden("D-08: only qone-advisor-api starts the saga for a student")
             if command.origin is not Origin.AGENT:
                 raise InvalidInput("origin", "a service starts the saga with origin AGENT")
             if command.confirmation_id is None:
@@ -72,10 +87,13 @@ class EnrollStudentSaga(SagaUseCases):
             correlation_id,
             self._clock.now(),
         )
-        stored, created = self._store.create(saga, idempotency_key)
-        if not created:
-            return Started(stored, created=False)  # Annex E: a repeated start runs no step again
-        return Started(self.run(stored), created=True)
+        key = StartKey(owner_of(caller), idempotency_key, fingerprint(command))
+        claim = self._store.create(saga, key)
+        if not claim.created:
+            if claim.fingerprint != key.fingerprint:
+                raise KeyReused()
+            return Started(claim.saga, created=False)  # Annex E: a repeated start runs no step again
+        return Started(self.run(claim.saga), created=True)
 
     def get(self, caller: Caller, saga_id: UUID) -> Saga:
         saga = self._store.find(saga_id)
@@ -106,13 +124,16 @@ class EnrollStudentSaga(SagaUseCases):
                 log.warning(
                     "step failed", extra={"traceId": saga.correlation_id, "step": step.value, "detail": str(error)}
                 )
-                saga = saga.step_failed(step, None, str(error), self._clock.now())
+                saga = saga.step_failed(step, Reason.PARTICIPANT_UNAVAILABLE, str(error), self._clock.now())
             self._store.save(saga)
         if saga.is_compensating:
             saga = self._compensate(saga)
         if saga.status is SagaStatus.RUNNING:
             saga = saga.finish(self._clock.now())
             self._store.save(saga)
+        self._metrics.saga_ended(
+            saga.type, saga.status.value.lower(), (saga.updated_at - saga.created_at).total_seconds()
+        )
         return saga
 
     def _do(self, step: Step, saga: Saga) -> Saga:
@@ -168,3 +189,19 @@ class EnrollStudentSaga(SagaUseCases):
     @staticmethod
     def _call(saga: Saga, step: str) -> Call:
         return Call(idempotency_key=f"{saga.id}:{step}", correlation_id=saga.correlation_id)
+
+
+def owner_of(caller: Caller) -> str:
+    """Whose key it is (#55): the user id of the token, or the SERVICE subject."""
+    return str(caller.user_id) if caller.user_id is not None else caller.subject
+
+
+def fingerprint(command: StartEnrollStudent) -> str:
+    """The SHA-256 of the canonical start body: the contract's fields, sorted, compact."""
+    body = {
+        "studentId": str(command.student_id),
+        "sectionId": str(command.section_id),
+        "origin": command.origin.value,
+        "confirmationId": str(command.confirmation_id) if command.confirmation_id else None,
+    }
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

@@ -61,11 +61,17 @@ class HttpBilling:
         self._http, self._base = http, base_url.rstrip("/")
 
     def ensure_tuition_paid(self, student_id: UUID, call: Call) -> None:
+        """Paid means PAID with the provider's evidence (#55): an invoice PAID without a
+        `providerReference` is not trusted and the gate rejects it as unpaid."""
         r = self._http.send("GET", f"{self._base}/api/v1/billing/students/{student_id}/invoices/current", call)
-        if r.status_code == 404 or (r.status_code == 200 and r.json().get("status") != "PAID"):
+        if r.status_code == 404 or (r.status_code == 200 and not _paid(r.json())):
             raise Rejected(Reason.TUITION_UNPAID)
         if r.status_code != 200:
             raise _unexpected(r)
+
+
+def _paid(invoice: dict) -> bool:
+    return invoice.get("status") == "PAID" and bool(invoice.get("providerReference"))
 
 
 class HttpEnrollment:

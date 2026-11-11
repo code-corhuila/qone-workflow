@@ -1,16 +1,19 @@
 """The FastAPI application of the workflow: correlation and access log (norm 5.3.9),
-the error envelope, the routes."""
+the error envelope, the routes, and the RED metrics with `GET /metrics` (HU-OBS-001)."""
 
 import logging
 import time
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
+from prometheus_client import CollectorRegistry
 
-from workflow.adapter.inbound.http import errors
+from workflow.adapter.inbound.http import errors, metrics
 from workflow.adapter.inbound.http.auth import TokenVerifier
 from workflow.adapter.inbound.http.router import router
+from workflow.application.port.inbound.health import ReadinessUseCase
 from workflow.application.port.inbound.sagas import SagaUseCases
+from workflow.application.usecase.readiness import CheckReadiness
 
 SERVICE = "qone-workflow"
 VERSION = "2.0.0"
@@ -18,10 +21,19 @@ CORRELATION_HEADER = "X-Correlation-Id"
 access = logging.getLogger("workflow.access")
 
 
-def create_app(use_cases: SagaUseCases, verifier: TokenVerifier, store_ping=lambda: True) -> FastAPI:
+def create_app(
+    use_cases: SagaUseCases,
+    verifier: TokenVerifier,
+    store_ping=lambda: True,
+    registry: CollectorRegistry | None = None,
+    readiness: ReadinessUseCase | None = None,
+) -> FastAPI:
+    """`registry` is the one the saga metrics write to; each app gets its own so tests are isolated.
+    `readiness` answers `/health/ready`; without it (in memory) there is nothing to wait for."""
     app = FastAPI(title=SERVICE, version=VERSION, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.use_cases = use_cases
     app.state.store_ping = store_ping
+    app.state.readiness = readiness or CheckReadiness([])
     app.state.verifier = verifier
     app.state.service = SERVICE
     app.state.version = VERSION
@@ -49,6 +61,7 @@ def create_app(use_cases: SagaUseCases, verifier: TokenVerifier, store_ping=lamb
         )
         return response
 
+    metrics.install(app, registry or CollectorRegistry(), SERVICE)
     errors.install(app)
     app.include_router(router)
     return app

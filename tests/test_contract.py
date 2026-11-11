@@ -69,6 +69,13 @@ def test_the_saga_matches_its_schema_in_every_ending(world):
         "Saga",
     )
     participants.reject.clear()
+    participants.fail.add("check-tuition")
+    down = client.post(
+        f"{BASE}/enroll-student", json=body, headers={**laura, "Idempotency-Key": "contract-saga-down"}
+    ).json()
+    assert down["reason"] == "PARTICIPANT_UNAVAILABLE"
+    assert_valid(down, "Saga")
+    participants.fail.clear()
     participants.fail.update({"commit-seat", "release-seat"})
     failed = client.post(
         f"{BASE}/enroll-student", json=body, headers={**laura, "Idempotency-Key": "contract-saga-3"}

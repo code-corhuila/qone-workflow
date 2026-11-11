@@ -1,7 +1,8 @@
 """The saga store in Redis (ADR-008): one hash per saga (`saga:<id>`, the status and the document),
-one key per Idempotency-Key pointing to the saga id (`saga-key:<key>`, written with NX so the
-first start wins), and the set of sagas left RUNNING (`sagas:running`) for the resume after a
-restart. Redis runs with `appendonly yes`; the idempotent steps absorb a lost last write."""
+one key per owner and Idempotency-Key (`saga-key:<owner>:<key>`, #55) holding the saga id and the
+fingerprint of the body, written with NX so the first start wins, and the set of sagas left
+RUNNING (`sagas:running`) for the resume after a restart. Redis runs with `appendonly yes`; the
+idempotent steps absorb a lost last write."""
 
 import json
 from datetime import datetime
@@ -9,6 +10,7 @@ from uuid import UUID
 
 import redis
 
+from workflow.application.port.outbound.participants import Claim, StartKey
 from workflow.domain.saga.saga import Origin, Reason, Saga, SagaStatus, Step
 
 RUNNING = "sagas:running"
@@ -24,13 +26,16 @@ class RedisSagaStore:
         except redis.RedisError:
             return False
 
-    def create(self, saga: Saga, idempotency_key: str) -> tuple[Saga, bool]:
-        if not self._redis.set(f"saga-key:{idempotency_key}", str(saga.id), nx=True):
-            earlier = self.find(UUID(self._redis.get(f"saga-key:{idempotency_key}").decode()))
+    def create(self, saga: Saga, key: StartKey) -> Claim:
+        name = f"saga-key:{key.owner}:{key.key}"
+        claimed = json.dumps({"sagaId": str(saga.id), "fingerprint": key.fingerprint})
+        if not self._redis.set(name, claimed, nx=True):
+            stored = json.loads(self._redis.get(name))
+            earlier = self.find(UUID(stored["sagaId"]))
             assert earlier is not None
-            return earlier, False
+            return Claim(earlier, False, stored["fingerprint"])
         self.save(saga)
-        return saga, True
+        return Claim(saga, True, key.fingerprint)
 
     def save(self, saga: Saga) -> None:
         pipe = self._redis.pipeline(transaction=True)
@@ -91,3 +96,18 @@ def from_doc(d: dict) -> Saga:
         updated_at=datetime.fromisoformat(d["updatedAt"]),
         compensated_steps=tuple(Step(x) for x in d["compensatedSteps"]),
     )
+
+
+class RedisReachable:
+    """The ready probe's check of Redis (HU-PLT-004): a PING on a client with a short timeout."""
+
+    name = "redis"
+
+    def __init__(self, client: redis.Redis) -> None:
+        self._redis = client
+
+    def reachable(self) -> bool:
+        try:
+            return bool(self._redis.ping())
+        except redis.RedisError:
+            return False

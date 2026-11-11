@@ -1,5 +1,6 @@
 """HTTP level: the Annex E entry checks: 401 without token, 400 per field, 201 on start, 200 on
-the retry, 404 with the envelope, the internal detail never in the response, the correlation."""
+the retry, the key scoped to its owner and 422 for another body (#55), 404 with the envelope,
+the internal detail never in the response, the correlation."""
 
 import pytest
 
@@ -54,6 +55,27 @@ def test_start_201_with_location_then_200_and_the_correlation_travels(world):
     assert client.get(f"{BASE}/{body['id']}", headers=laura()).json() == body
 
 
+def test_two_students_with_the_same_key_each_get_their_own_saga(world):
+    """#55: Santiago sends Laura's Idempotency-Key; he gets a new saga of his own, never Laura's."""
+    client, participants = world
+    lauras = client.post(f"{BASE}/enroll-student", json=BODY, headers={**laura(), **KEY})
+    santiago = bearer(SANTIAGO, "STUDENT", "Santiago Ruiz")
+    his = client.post(f"{BASE}/enroll-student", json={**BODY, "studentId": SANTIAGO}, headers={**santiago, **KEY})
+    assert lauras.status_code == 201 and his.status_code == 201
+    assert his.json()["id"] != lauras.json()["id"] and his.json()["studentId"] == SANTIAGO
+    assert LAURA not in his.text and len(participants.calls) == 10
+
+
+def test_the_same_key_with_another_body_is_422_and_starts_nothing(world):
+    client, participants = world
+    first = client.post(f"{BASE}/enroll-student", json=BODY, headers={**laura(), **KEY})
+    other = {**BODY, "sectionId": "55555555-5555-4555-8555-555555555506"}
+    r = client.post(f"{BASE}/enroll-student", json=other, headers={**laura(), **KEY})
+    assert first.status_code == 201 and r.status_code == 422
+    assert r.json()["error"] == "IDEMPOTENCY_KEY_REUSED" and {"message", "traceId"} <= r.json().keys()
+    assert first.json()["id"] not in r.text and len(participants.calls) == 5
+
+
 def test_a_compensated_saga_shows_the_step_and_the_reason_never_the_internal_detail(world):
     client, participants = world
     participants.reject["reserve-seat"] = Reason.NO_SEATS
@@ -65,6 +87,17 @@ def test_a_compensated_saga_shows_the_step_and_the_reason_never_the_internal_det
         f"{BASE}/enroll-student", json=BODY, headers={**laura(), "Idempotency-Key": "enroll-second-0001"}
     ).text
     assert "COMPENSATED" in body and "qone-internal-host" not in body and "503" not in body and "detail" not in body
+
+
+def test_a_participant_down_shows_the_step_and_participant_unavailable_never_the_detail(world):
+    """HU-RES-001 (#57): qone-billing-api stopped."""
+    client, participants = world
+    participants.fail.add("check-tuition")
+    r = client.post(f"{BASE}/enroll-student", json=BODY, headers={**laura(), **KEY})
+    body = r.json()
+    assert r.status_code == 201 and body["status"] == "COMPENSATED"
+    assert body["failedStep"] == "check-tuition" and body["reason"] == "PARTICIPANT_UNAVAILABLE"
+    assert "qone-internal-host" not in r.text and "503" not in r.text
 
 
 def test_the_border_names_every_field_and_the_rules_of_the_starter(world):
@@ -97,6 +130,16 @@ def test_the_border_names_every_field_and_the_rules_of_the_starter(world):
         client.post(f"{BASE}/enroll-student", json=BODY, headers={**bearer(PATRICIA, "ADMIN"), **KEY}).status_code
         == 403
     )
+
+
+def test_only_the_advisor_token_starts_a_saga_for_a_student(world):
+    """#55, D-08: the advisor's SERVICE token starts Laura's saga; any other SERVICE subject gets 403."""
+    client, participants = world
+    body = {**BODY, "origin": "AGENT", "confirmationId": "77777777-7777-4777-8777-777777777701"}
+    denied = client.post(f"{BASE}/enroll-student", json=body, headers={**bearer("qone-worker", "SERVICE"), **KEY})
+    assert denied.status_code == 403 and denied.json()["error"] == "FORBIDDEN" and participants.calls == []
+    r = client.post(f"{BASE}/enroll-student", json=body, headers={**bearer("qone-advisor-api", "SERVICE"), **KEY})
+    assert r.status_code == 201 and r.json()["studentId"] == LAURA and r.json()["origin"] == "AGENT"
 
 
 def test_reading_a_saga(world):
