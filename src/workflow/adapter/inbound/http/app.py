@@ -10,7 +10,9 @@ from fastapi import FastAPI, Request
 from workflow.adapter.inbound.http import errors
 from workflow.adapter.inbound.http.auth import TokenVerifier
 from workflow.adapter.inbound.http.router import router
+from workflow.application.port.inbound.health import ReadinessUseCase
 from workflow.application.port.inbound.sagas import SagaUseCases
+from workflow.application.usecase.readiness import CheckReadiness
 
 SERVICE = "qone-workflow"
 VERSION = "2.0.0"
@@ -18,10 +20,17 @@ CORRELATION_HEADER = "X-Correlation-Id"
 access = logging.getLogger("workflow.access")
 
 
-def create_app(use_cases: SagaUseCases, verifier: TokenVerifier, store_ping=lambda: True) -> FastAPI:
+def create_app(
+    use_cases: SagaUseCases,
+    verifier: TokenVerifier,
+    store_ping=lambda: True,
+    readiness: ReadinessUseCase | None = None,
+) -> FastAPI:
+    """`readiness` answers `/health/ready`; without it (in memory) there is nothing to wait for."""
     app = FastAPI(title=SERVICE, version=VERSION, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.use_cases = use_cases
     app.state.store_ping = store_ping
+    app.state.readiness = readiness or CheckReadiness([])
     app.state.verifier = verifier
     app.state.service = SERVICE
     app.state.version = VERSION

@@ -48,7 +48,8 @@ def bearer(sub: str, role: str, name: str = "", **kw) -> dict[str, str]:
     return {"Authorization": f"Bearer {mint(sub, role, name, **kw)}"}
 
 
-def make_client():
+def make_client(readiness=None):
     store, participants = InMemorySagaStore(), Participants()
     saga = EnrollStudentSaga(store, participants, participants, participants, FixedClock(), SequenceIds())
-    return TestClient(create_app(saga, TokenVerifier(PUBLIC_PEM)), raise_server_exceptions=False), participants
+    app = create_app(saga, TokenVerifier(PUBLIC_PEM), readiness=readiness)
+    return TestClient(app, raise_server_exceptions=False), participants
