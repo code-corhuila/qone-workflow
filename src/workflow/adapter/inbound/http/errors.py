@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from workflow.adapter.inbound.http.auth import AuthError
-from workflow.application.errors import Forbidden, InvalidInput, NotFound
+from workflow.application.errors import Forbidden, InvalidInput, KeyReused, NotFound
 
 log = logging.getLogger("workflow.http")
 
@@ -62,6 +62,10 @@ def install(app: FastAPI) -> None:
     @app.exception_handler(NotFound)
     async def _not_found(request: Request, error: NotFound):
         return envelope(request, 404, "NOT_FOUND", error.message)
+
+    @app.exception_handler(KeyReused)
+    async def _key_reused(request: Request, error: KeyReused):
+        return envelope(request, 422, "IDEMPOTENCY_KEY_REUSED", error.message)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http(request: Request, error: StarletteHTTPException):

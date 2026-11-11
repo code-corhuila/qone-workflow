@@ -22,6 +22,27 @@ class Unavailable(Exception):
 
 
 @dataclass(frozen=True)
+class StartKey:
+    """The Idempotency-Key of a start, scoped to its owner (#55): the user id of the token or the
+    SERVICE subject, so another caller's key never finds this saga. `fingerprint` is the SHA-256
+    of the canonical request body: a replay must carry the same one."""
+
+    owner: str
+    key: str
+    fingerprint: str
+
+
+@dataclass(frozen=True)
+class Claim:
+    """What the store answers to a start: the saga under the owner's key, whether this call
+    created it, and the fingerprint stored with the key."""
+
+    saga: Saga
+    created: bool
+    fingerprint: str
+
+
+@dataclass(frozen=True)
 class Call:
     """What travels with every participant call: the step's key and the caller's correlation id."""
 
@@ -60,9 +81,9 @@ class Catalog(Protocol):
 
 
 class SagaStore(Protocol):
-    def create(self, saga: Saga, idempotency_key: str) -> tuple[Saga, bool]:
-        """Stores a new saga under its key, atomically: (the saga, True), or (the saga the key
-        started first, False)."""
+    def create(self, saga: Saga, key: StartKey) -> Claim:
+        """Stores a new saga under its owner's key, atomically: the saga created, or the saga the
+        same owner's key started first with the fingerprint it was started with."""
 
     def save(self, saga: Saga) -> None: ...
 
@@ -84,11 +105,13 @@ __all__ = [
     "Billing",
     "Call",
     "Catalog",
+    "Claim",
     "Clock",
     "Enrollment",
     "IdGenerator",
     "Origin",
     "Rejected",
     "SagaStore",
+    "StartKey",
     "Unavailable",
 ]

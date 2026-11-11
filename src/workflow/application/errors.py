@@ -1,4 +1,4 @@
-"""Errors of the application layer; the HTTP adapter translates them (403, 404) in one place."""
+"""Errors of the application layer; the HTTP adapter translates them (403, 404, 422) in one place."""
 
 
 class Forbidden(Exception):
@@ -19,4 +19,12 @@ class InvalidInput(Exception):
     def __init__(self, field: str, message: str) -> None:
         super().__init__(message)
         self.field = field
+        self.message = message
+
+
+class KeyReused(Exception):
+    """#55: the caller repeats an Idempotency-Key with another request body."""
+
+    def __init__(self, message: str = "the Idempotency-Key was already used with another request body") -> None:
+        super().__init__(message)
         self.message = message

@@ -1,6 +1,7 @@
 """Core level: the Annex E checks of the orchestrator with fake participants and the in-memory
 store: happy path, failure at each step compensating in reverse, a failed compensation, the
-idempotent start, the step keys and the correlation, a resumed saga, who may start and read."""
+idempotent start scoped to its owner (#55), the step keys and the correlation, a resumed saga,
+who may start and read."""
 
 from uuid import uuid4
 
@@ -8,12 +9,14 @@ import pytest
 
 from tests.fakes import LAURA, SANTIAGO, SECTION, FixedClock, Participants, SequenceIds
 from workflow.adapter.outbound.state.memory import InMemorySagaStore
-from workflow.application.errors import Forbidden, InvalidInput, NotFound
+from workflow.application.errors import Forbidden, InvalidInput, KeyReused, NotFound
 from workflow.application.port.inbound.sagas import Caller, Role, StartEnrollStudent
+from workflow.application.port.outbound.participants import StartKey
 from workflow.application.usecase.enroll_student import EnrollStudentSaga
 from workflow.domain.saga.saga import Origin, Reason, Saga, SagaStatus, Step
 
 laura = Caller(LAURA, Role.STUDENT, "Laura Gómez", str(LAURA))
+santiago = Caller(SANTIAGO, Role.STUDENT, "Santiago Ruiz", str(SANTIAGO))
 admin = Caller(uuid4(), Role.ADMIN, "Patricia Mora")
 advisor = Caller(None, Role.SERVICE, "qone-advisor-api", "qone-advisor-api")
 KEY = "enroll-6f1d2c3e-9b7a-4e1f-8c2d-0a1b2c3d4e5f"
@@ -114,13 +117,38 @@ def test_a_repeated_start_returns_the_same_saga_and_runs_no_step(world):
     assert not again.created and again.saga == first.saga and len(participants.calls) == 5
 
 
+def test_the_key_is_scoped_to_its_owner_so_another_student_never_gets_lauras_saga(world):
+    """#55: Santiago repeats Laura's Idempotency-Key and starts his own saga, never reads hers."""
+    _, participants, saga = world
+    lauras = start(saga).saga
+    his = start(saga, caller=santiago, command=StartEnrollStudent(SANTIAGO, SECTION, Origin.UI))
+    assert his.created and his.saga.id != lauras.id and his.saga.student_id == SANTIAGO
+    assert len(participants.calls) == 10, "his saga ran its own five steps"
+
+
+def test_the_advisor_and_the_student_keys_live_apart(world):
+    _, _, saga = world
+    lauras = start(saga).saga
+    agent = start(saga, caller=advisor, command=StartEnrollStudent(LAURA, SECTION, Origin.AGENT, uuid4()))
+    assert agent.created and agent.saga.id != lauras.id and agent.saga.origin is Origin.AGENT
+
+
+def test_the_same_key_with_another_body_is_refused_and_runs_nothing(world):
+    """#55: a replay must carry the request that used the key first."""
+    _, participants, saga = world
+    start(saga)
+    with pytest.raises(KeyReused):
+        start(saga, command=StartEnrollStudent(LAURA, uuid4(), Origin.UI))
+    assert len(participants.calls) == 5
+
+
 def test_a_saga_left_running_resumes_from_its_persisted_state(world):
     store, participants, saga = world
     halfway = Saga.start(uuid4(), LAURA, SECTION, Origin.UI, None, "corr-restart", FixedClock().now())
     halfway = halfway.step_done(Step.CHECK_TUITION, FixedClock().now()).step_done(
         Step.CHECK_ELIGIBILITY, FixedClock().now()
     )
-    store.create(halfway, "enroll-restart-0001")
+    store.create(halfway, StartKey(str(LAURA), "enroll-restart-0001", "fingerprint"))
     assert saga.resume_running() == 1
     assert participants.operations() == ["reserve-seat", "confirm-enrollment", "commit-seat"]
     assert store.find(halfway.id).status is SagaStatus.COMPLETED
