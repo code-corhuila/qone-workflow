@@ -35,6 +35,11 @@ the same caller and key with the same body answer `200` with the saga; with anot
 - Contract: `07-api/contracts/openapi/qone-workflow.yaml` (WF-01..WF-03) in `qone-docs`.
 - Piece page: `09-microservices/services/07-workflow/README.md`. Story: `code-corhuila/qone-docs#42` (HU-ENR-002).
 
+Who starts it (`code-corhuila/qone-docs#55`, D-08): a STUDENT for themselves with `origin: UI`, or
+the SERVICE token whose subject is `qone-advisor-api` with `origin: AGENT` and the `confirmationId`;
+any other SERVICE subject gets `403`. The `check-tuition` gate passes only on an invoice `PAID`
+with its `providerReference` (the provider's evidence); `PAID` without it is `TUITION_UNPAID`.
+
 ## How to run it
 
 ```bash
