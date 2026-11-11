@@ -26,13 +26,13 @@ timeout, a 5xx after the retries) ends `COMPENSATED` with `reason: PARTICIPANT_U
 recorded as a rejection (HU-RES-001); a failed compensation ends `FAILED` for a person to decide. Every step call carries the workflow's `SERVICE_TOKEN`, `Idempotency-Key: <sagaId>:<step>`
 and the caller's `X-Correlation-Id`.
 
+- Contract: `07-api/contracts/openapi/qone-workflow.yaml` (WF-01..WF-03) in `qone-docs`.
+- Piece page: `09-microservices/services/07-workflow/README.md`. Story: `code-corhuila/qone-docs#42` (HU-ENR-002).
+
 Who starts it (`code-corhuila/qone-docs#55`, D-08): a STUDENT for themselves with `origin: UI`, or
 the SERVICE token whose subject is `qone-advisor-api` with `origin: AGENT` and the `confirmationId`;
 any other SERVICE subject gets `403`. The `check-tuition` gate passes only on an invoice `PAID`
 with its `providerReference` (the provider's evidence); `PAID` without it is `TUITION_UNPAID`.
-
-- Contract: `07-api/contracts/openapi/qone-workflow.yaml` (WF-01..WF-03) in `qone-docs`.
-- Piece page: `09-microservices/services/07-workflow/README.md`. Story: `code-corhuila/qone-docs#42` (HU-ENR-002).
 
 ## How to run it
 
