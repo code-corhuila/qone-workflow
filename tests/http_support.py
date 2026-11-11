@@ -7,10 +7,12 @@ import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
+from prometheus_client import CollectorRegistry
 
 from tests.fakes import FixedClock, Participants, SequenceIds
 from workflow.adapter.inbound.http.app import create_app
 from workflow.adapter.inbound.http.auth import TokenVerifier
+from workflow.adapter.outbound.metrics.prometheus import PrometheusSagaMetrics
 from workflow.adapter.outbound.state.memory import InMemorySagaStore
 from workflow.application.usecase.enroll_student import EnrollStudentSaga
 
@@ -49,6 +51,9 @@ def bearer(sub: str, role: str, name: str = "", **kw) -> dict[str, str]:
 
 
 def make_client():
-    store, participants = InMemorySagaStore(), Participants()
-    saga = EnrollStudentSaga(store, participants, participants, participants, FixedClock(), SequenceIds())
-    return TestClient(create_app(saga, TokenVerifier(PUBLIC_PEM)), raise_server_exceptions=False), participants
+    store, participants, registry = InMemorySagaStore(), Participants(), CollectorRegistry()
+    saga = EnrollStudentSaga(
+        store, participants, participants, participants, FixedClock(), SequenceIds(), PrometheusSagaMetrics(registry)
+    )
+    app = create_app(saga, TokenVerifier(PUBLIC_PEM), registry=registry)
+    return TestClient(app, raise_server_exceptions=False), participants
