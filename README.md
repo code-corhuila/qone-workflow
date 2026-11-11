@@ -51,6 +51,11 @@ network). It exposes `http_server_requests_total{service,method,route,status_cla
 `unmatched`) and, for every saga that ends, `workflow_saga_requests_total{saga,outcome}` and
 `workflow_saga_duration_seconds{saga,outcome}` (outcome `completed`, `compensated` or `failed`).
 
+Ready probe (HU-PLT-004, ADR-011): `GET /api/v1/sagas/health/ready`, public like `/health`, PINGs
+Redis with a 1 s timeout and answers `200 {"status":"ready","service":"qone-workflow","checks":{"redis":"ok"}}`
+or `503` with the common envelope (`SERVICE_UNAVAILABLE`, `redis is not reachable`). In memory there
+is nothing to wait for: it answers ready with no checks. `/health` stays the liveness.
+
 Container image and compose (`deploy/`, Annex G): `docker build -f deploy/Dockerfile -t
 qone-workflow:dev .`, then `deploy/smoke.sh`; `deploy/compose.yml` is what `qone-infra` includes,
 next to the `redis:7` service it composes with `appendonly yes` (ADR-008). Limits: three attempts

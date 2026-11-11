@@ -50,10 +50,10 @@ def bearer(sub: str, role: str, name: str = "", **kw) -> dict[str, str]:
     return {"Authorization": f"Bearer {mint(sub, role, name, **kw)}"}
 
 
-def make_client():
+def make_client(readiness=None):
     store, participants, registry = InMemorySagaStore(), Participants(), CollectorRegistry()
     saga = EnrollStudentSaga(
         store, participants, participants, participants, FixedClock(), SequenceIds(), PrometheusSagaMetrics(registry)
     )
-    app = create_app(saga, TokenVerifier(PUBLIC_PEM), registry=registry)
+    app = create_app(saga, TokenVerifier(PUBLIC_PEM), registry=registry, readiness=readiness)
     return TestClient(app, raise_server_exceptions=False), participants
