@@ -26,6 +26,12 @@ timeout, a 5xx after the retries) ends `COMPENSATED` with `reason: PARTICIPANT_U
 recorded as a rejection (HU-RES-001); a failed compensation ends `FAILED` for a person to decide. Every step call carries the workflow's `SERVICE_TOKEN`, `Idempotency-Key: <sagaId>:<step>`
 and the caller's `X-Correlation-Id`.
 
+The start's `Idempotency-Key` belongs to its caller (`code-corhuila/qone-docs#55`): it is stored in
+Redis as `saga-key:<owner>:<key>` (owner = the user id of the token or the SERVICE subject) with the
+SHA-256 of the canonical body. The same key from another caller starts that caller's own saga;
+the same caller and key with the same body answer `200` with the saga; with another body, `422`
+`IDEMPOTENCY_KEY_REUSED` and no step runs.
+
 - Contract: `07-api/contracts/openapi/qone-workflow.yaml` (WF-01..WF-03) in `qone-docs`.
 - Piece page: `09-microservices/services/07-workflow/README.md`. Story: `code-corhuila/qone-docs#42` (HU-ENR-002).
 
