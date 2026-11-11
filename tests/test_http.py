@@ -110,6 +110,16 @@ def test_the_border_names_every_field_and_the_rules_of_the_starter(world):
     )
 
 
+def test_only_the_advisor_token_starts_a_saga_for_a_student(world):
+    """#55, D-08: the advisor's SERVICE token starts Laura's saga; any other SERVICE subject gets 403."""
+    client, participants = world
+    body = {**BODY, "origin": "AGENT", "confirmationId": "77777777-7777-4777-8777-777777777701"}
+    denied = client.post(f"{BASE}/enroll-student", json=body, headers={**bearer("qone-worker", "SERVICE"), **KEY})
+    assert denied.status_code == 403 and denied.json()["error"] == "FORBIDDEN" and participants.calls == []
+    r = client.post(f"{BASE}/enroll-student", json=body, headers={**bearer("qone-advisor-api", "SERVICE"), **KEY})
+    assert r.status_code == 201 and r.json()["studentId"] == LAURA and r.json()["origin"] == "AGENT"
+
+
 def test_reading_a_saga(world):
     client, _ = world
     saga = client.post(f"{BASE}/enroll-student", json=BODY, headers={**laura(), **KEY}).json()["id"]

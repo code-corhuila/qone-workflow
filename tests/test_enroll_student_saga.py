@@ -16,6 +16,7 @@ from workflow.domain.saga.saga import Origin, Reason, Saga, SagaStatus, Step
 laura = Caller(LAURA, Role.STUDENT, "Laura Gómez", str(LAURA))
 admin = Caller(uuid4(), Role.ADMIN, "Patricia Mora")
 advisor = Caller(None, Role.SERVICE, "qone-advisor-api", "qone-advisor-api")
+worker = Caller(None, Role.SERVICE, "qone-worker", "qone-worker")
 KEY = "enroll-6f1d2c3e-9b7a-4e1f-8c2d-0a1b2c3d4e5f"
 
 
@@ -144,6 +145,15 @@ def test_who_may_start(world):
     with pytest.raises(InvalidInput) as caught:
         start(saga, key="short")
     assert caught.value.field == "Idempotency-Key"
+
+
+def test_only_the_advisor_service_starts_a_saga_for_a_student(world):
+    """#55, D-08: another SERVICE token (a worker, a participant) may not enroll anybody."""
+    _, participants, saga = world
+    with pytest.raises(Forbidden):
+        start(saga, caller=worker, command=StartEnrollStudent(LAURA, SECTION, Origin.AGENT, uuid4()))
+    assert participants.calls == []
+    assert start(saga, caller=advisor, command=StartEnrollStudent(LAURA, SECTION, Origin.AGENT, uuid4())).created
 
 
 def test_who_may_read(world):
