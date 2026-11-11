@@ -82,11 +82,21 @@ def test_a_failed_last_step_undoes_in_reverse_order(world):
     _, participants, saga = world
     participants.fail.add("commit-seat")
     result = start(saga).saga
-    assert result.status is SagaStatus.COMPENSATED and result.failed_step is Step.COMMIT_SEAT and result.reason is None
+    assert result.status is SagaStatus.COMPENSATED and result.failed_step is Step.COMMIT_SEAT
+    assert result.reason is Reason.PARTICIPANT_UNAVAILABLE
     assert participants.operations()[-2:] == ["cancel-enrollment", "release-seat"]
     assert result.detail == "commit-seat: upstream 503 from qone-internal-host", (
         "kept in the state, never in the contract fields"
     )
+
+
+def test_a_participant_down_at_the_first_step_compensates_with_participant_unavailable(world):
+    """HU-RES-001 (#57): billing stopped; nothing to undo, nothing recorded as a rejection."""
+    _, participants, saga = world
+    participants.fail.add("check-tuition")
+    result = start(saga).saga
+    assert result.status is SagaStatus.COMPENSATED and result.failed_step is Step.CHECK_TUITION
+    assert result.reason is Reason.PARTICIPANT_UNAVAILABLE and participants.operations() == ["check-tuition"]
 
 
 def test_a_failed_compensation_ends_failed(world):

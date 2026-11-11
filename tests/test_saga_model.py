@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from workflow.domain.saga.saga import STEPS, Origin, Reason, Saga, SagaRuleError, SagaStatus, Step
+from workflow.domain.saga.saga import RECORDABLE, STEPS, Origin, Reason, Saga, SagaRuleError, SagaStatus, Step
 
 NOW = datetime(2026, 10, 13, 12, 0, tzinfo=UTC)
 
@@ -83,3 +83,17 @@ def test_a_failed_compensation_ends_failed_for_a_person():
     assert failed.status is SagaStatus.FAILED and "undo of reserve-seat failed" in failed.detail
     with pytest.raises(SagaRuleError):
         saga.undone(Step.CHECK_TUITION, NOW)
+
+
+def test_an_unavailable_participant_compensates_with_a_clear_reason_that_is_not_a_rejection():
+    """HU-RES-001 (#57): a participant that does not answer is named as the reason, not left empty;
+    it is not a domain rejection, so the enrollment domain does not record it (D-01)."""
+    saga = started().step_failed(Step.CHECK_TUITION, Reason.PARTICIPANT_UNAVAILABLE, "billing 503", NOW)
+    final = saga.finish(NOW)
+    assert (
+        final.status is SagaStatus.COMPENSATED
+        and final.failed_step is Step.CHECK_TUITION
+        and final.reason is Reason.PARTICIPANT_UNAVAILABLE
+        and final.detail == "billing 503"
+    )
+    assert Reason.PARTICIPANT_UNAVAILABLE not in RECORDABLE
