@@ -60,6 +60,16 @@ class Participants:
         self._hit("commit-seat", call)
 
 
+class RecordingMetrics:
+    """The saga metrics port, recording every ended saga as (saga, outcome, seconds)."""
+
+    def __init__(self) -> None:
+        self.ended: list[tuple[str, str, float]] = []
+
+    def saga_ended(self, saga: str, outcome: str, seconds: float) -> None:
+        self.ended.append((saga, outcome, seconds))
+
+
 class FixedClock:
     def __init__(self) -> None:
         self.current = datetime(2026, 10, 13, 12, 0, tzinfo=UTC)
