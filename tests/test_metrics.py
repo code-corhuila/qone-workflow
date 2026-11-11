@@ -112,3 +112,10 @@ def test_a_saga_through_http_grows_its_outcome_series(world):
         assert sample(client, "workflow_saga_duration_seconds_count", labels) == 1
     started = {"service": "qone-workflow", "method": "POST", "route": f"{BASE}/enroll-student", "status_class": "2xx"}
     assert sample(client, "http_server_requests_total", started) == 2
+
+
+def test_a_non_standard_method_is_counted_as_other(world):
+    client, _ = world
+    client.request("PURGE", f"{BASE}/health")
+    text = client.get("/metrics").text
+    assert 'method="OTHER"' in text and 'method="PURGE"' not in text
