@@ -6,15 +6,20 @@ a failed undo ends FAILED for a person to decide. Every call carries `<sagaId>:<
 Idempotency-Key and the caller's correlation id, so a resumed or repeated step never acts twice.
 Every saga that ends is reported to the metrics port with its outcome and duration (HU-OBS-001).
 
+The start's Idempotency-Key belongs to its caller (#55): the same key from another caller starts
+that caller's own saga, and a replay with another body is refused (KeyReused) and runs nothing.
+
 Who may start it (07-api/authentication.md): a STUDENT for themselves with origin UI; the
 advisor's SERVICE token for a student with origin AGENT and the confirmation (INV-ENR-005).
 Who may read it: the student who started it, an ADMIN or a SERVICE; another student gets 404.
 """
 
+import hashlib
+import json
 import logging
 from uuid import UUID
 
-from workflow.application.errors import Forbidden, InvalidInput, NotFound
+from workflow.application.errors import Forbidden, InvalidInput, KeyReused, NotFound
 from workflow.application.port.inbound.sagas import Caller, Role, SagaUseCases, Started, StartEnrollStudent
 from workflow.application.port.outbound.metrics import NoMetrics, SagaMetrics
 from workflow.application.port.outbound.participants import (
@@ -26,6 +31,7 @@ from workflow.application.port.outbound.participants import (
     IdGenerator,
     Rejected,
     SagaStore,
+    StartKey,
     Unavailable,
 )
 from workflow.domain.saga.saga import RECORDABLE, Origin, Reason, Saga, SagaStatus, Step
@@ -77,10 +83,13 @@ class EnrollStudentSaga(SagaUseCases):
             correlation_id,
             self._clock.now(),
         )
-        stored, created = self._store.create(saga, idempotency_key)
-        if not created:
-            return Started(stored, created=False)  # Annex E: a repeated start runs no step again
-        return Started(self.run(stored), created=True)
+        key = StartKey(owner_of(caller), idempotency_key, fingerprint(command))
+        claim = self._store.create(saga, key)
+        if not claim.created:
+            if claim.fingerprint != key.fingerprint:
+                raise KeyReused()
+            return Started(claim.saga, created=False)  # Annex E: a repeated start runs no step again
+        return Started(self.run(claim.saga), created=True)
 
     def get(self, caller: Caller, saga_id: UUID) -> Saga:
         saga = self._store.find(saga_id)
@@ -176,3 +185,19 @@ class EnrollStudentSaga(SagaUseCases):
     @staticmethod
     def _call(saga: Saga, step: str) -> Call:
         return Call(idempotency_key=f"{saga.id}:{step}", correlation_id=saga.correlation_id)
+
+
+def owner_of(caller: Caller) -> str:
+    """Whose key it is (#55): the user id of the token, or the SERVICE subject."""
+    return str(caller.user_id) if caller.user_id is not None else caller.subject
+
+
+def fingerprint(command: StartEnrollStudent) -> str:
+    """The SHA-256 of the canonical start body: the contract's fields, sorted, compact."""
+    body = {
+        "studentId": str(command.student_id),
+        "sectionId": str(command.section_id),
+        "origin": command.origin.value,
+        "confirmationId": str(command.confirmation_id) if command.confirmation_id else None,
+    }
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
