@@ -67,6 +67,17 @@ def test_a_compensated_saga_shows_the_step_and_the_reason_never_the_internal_det
     assert "COMPENSATED" in body and "qone-internal-host" not in body and "503" not in body and "detail" not in body
 
 
+def test_a_participant_down_shows_the_step_and_participant_unavailable_never_the_detail(world):
+    """HU-RES-001 (#57): qone-billing-api stopped."""
+    client, participants = world
+    participants.fail.add("check-tuition")
+    r = client.post(f"{BASE}/enroll-student", json=BODY, headers={**laura(), **KEY})
+    body = r.json()
+    assert r.status_code == 201 and body["status"] == "COMPENSATED"
+    assert body["failedStep"] == "check-tuition" and body["reason"] == "PARTICIPANT_UNAVAILABLE"
+    assert "qone-internal-host" not in r.text and "503" not in r.text
+
+
 def test_the_border_names_every_field_and_the_rules_of_the_starter(world):
     client, _ = world
     bad = client.post(

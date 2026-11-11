@@ -8,15 +8,20 @@ import os
 import sys
 import threading
 
+from prometheus_client import CollectorRegistry
+
 from workflow.adapter.inbound.http.app import create_app
 from workflow.adapter.inbound.http.auth import TokenVerifier
+from workflow.adapter.outbound.metrics.prometheus import PrometheusSagaMetrics
 from workflow.adapter.outbound.participants.http import HttpBilling, HttpCatalog, HttpClient, HttpEnrollment
 from workflow.adapter.outbound.runtime import SystemClock, Uuid4Generator
 from workflow.adapter.outbound.state.memory import InMemorySagaStore
 from workflow.application.usecase.enroll_student import EnrollStudentSaga
+from workflow.application.usecase.readiness import CheckReadiness
 
 # Explicit limits (norm 5.3.10, Annex D): bounded retries per call, server limits.
 CALL_ATTEMPTS = 3
+READY_TIMEOUT_SECONDS = 1  # the ready probe answers fast even when Redis hangs (HU-PLT-004)
 HTTP_KEEP_ALIVE_SECONDS = 60
 HTTP_GRACEFUL_SHUTDOWN_SECONDS = 20
 
@@ -54,15 +59,20 @@ def build_app(settings: Settings | None = None):
     if settings.redis_url:
         import redis
 
-        from workflow.adapter.outbound.state.redis import RedisSagaStore
+        from workflow.adapter.outbound.state.redis import RedisReachable, RedisSagaStore
 
         store = RedisSagaStore(redis.Redis.from_url(settings.redis_url, socket_timeout=3, socket_connect_timeout=3))
         ping = store.ping
+        probe = redis.Redis.from_url(
+            settings.redis_url, socket_timeout=READY_TIMEOUT_SECONDS, socket_connect_timeout=READY_TIMEOUT_SECONDS
+        )
+        readiness = CheckReadiness([RedisReachable(probe)])
         log.info("saga store: redis")
     else:
-        store, ping = InMemorySagaStore(), lambda: True
+        store, ping, readiness = InMemorySagaStore(), lambda: True, CheckReadiness([])
         log.warning("saga store: in memory (REDIS_URL not set); a restart loses every saga; development only")
     http = HttpClient(settings.service_token, attempts=CALL_ATTEMPTS)
+    registry = CollectorRegistry()
     saga = EnrollStudentSaga(
         store,
         HttpBilling(http, settings.billing_url),
@@ -70,9 +80,12 @@ def build_app(settings: Settings | None = None):
         HttpCatalog(http, settings.catalog_url),
         SystemClock(),
         Uuid4Generator(),
+        PrometheusSagaMetrics(registry),
     )
     threading.Thread(target=_resume, args=(saga, log), daemon=True).start()
-    return create_app(saga, TokenVerifier(settings.public_key), store_ping=ping)
+    return create_app(
+        saga, TokenVerifier(settings.public_key), store_ping=ping, registry=registry, readiness=readiness
+    )
 
 
 def _resume(saga: EnrollStudentSaga, log: logging.Logger) -> None:

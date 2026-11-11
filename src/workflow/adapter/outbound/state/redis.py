@@ -91,3 +91,18 @@ def from_doc(d: dict) -> Saga:
         updated_at=datetime.fromisoformat(d["updatedAt"]),
         compensated_steps=tuple(Step(x) for x in d["compensatedSteps"]),
     )
+
+
+class RedisReachable:
+    """The ready probe's check of Redis (HU-PLT-004): a PING on a client with a short timeout."""
+
+    name = "redis"
+
+    def __init__(self, client: redis.Redis) -> None:
+        self._redis = client
+
+    def reachable(self) -> bool:
+        try:
+            return bool(self._redis.ping())
+        except redis.RedisError:
+            return False
