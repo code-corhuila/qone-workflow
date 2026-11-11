@@ -133,7 +133,7 @@ components:
           type: string
           nullable: true
           description: The domain reason of a `COMPENSATED` saga; never a server name or an upstream code
-          enum: [TUITION_UNPAID, PREREQ_MISSING, NO_SEATS, SCHEDULE_CONFLICT, DUPLICATE, null]
+          enum: [TUITION_UNPAID, PREREQ_MISSING, NO_SEATS, SCHEDULE_CONFLICT, DUPLICATE, PARTICIPANT_UNAVAILABLE, null]
         reservationId:
           nullable: true
           allOf: [{ $ref: './_shared.yaml#/components/schemas/UUID' }]

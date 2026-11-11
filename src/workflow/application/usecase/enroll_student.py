@@ -1,6 +1,7 @@
 """The orchestrator of the enroll-student saga (Annex E): runs the steps in order, persists the
 saga after every step, and when a step fails undoes the done steps in reverse. A rejected gate
 ends COMPENSATED with its reason, and the enrollment domain records the rejected attempt (D-01);
+a participant that does not answer ends COMPENSATED with PARTICIPANT_UNAVAILABLE (HU-RES-001);
 a failed undo ends FAILED for a person to decide. Every call carries `<sagaId>:<step>` as its
 Idempotency-Key and the caller's correlation id, so a resumed or repeated step never acts twice.
 
@@ -25,7 +26,7 @@ from workflow.application.port.outbound.participants import (
     SagaStore,
     Unavailable,
 )
-from workflow.domain.saga.saga import RECORDABLE, Origin, Saga, SagaStatus, Step
+from workflow.domain.saga.saga import RECORDABLE, Origin, Reason, Saga, SagaStatus, Step
 
 log = logging.getLogger("workflow.saga")
 KEY_MIN, KEY_MAX = 8, 128
@@ -106,7 +107,7 @@ class EnrollStudentSaga(SagaUseCases):
                 log.warning(
                     "step failed", extra={"traceId": saga.correlation_id, "step": step.value, "detail": str(error)}
                 )
-                saga = saga.step_failed(step, None, str(error), self._clock.now())
+                saga = saga.step_failed(step, Reason.PARTICIPANT_UNAVAILABLE, str(error), self._clock.now())
             self._store.save(saga)
         if saga.is_compensating:
             saga = self._compensate(saga)

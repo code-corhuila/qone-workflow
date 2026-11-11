@@ -44,9 +44,13 @@ class Reason(StrEnum):
     NO_SEATS = "NO_SEATS"
     SCHEDULE_CONFLICT = "SCHEDULE_CONFLICT"
     DUPLICATE = "DUPLICATE"
+    # Not a domain verdict: a participant did not answer (network, timeout, 5xx after the retries),
+    # so the saga compensated without knowing; the student may simply try again (HU-RES-001).
+    PARTICIPANT_UNAVAILABLE = "PARTICIPANT_UNAVAILABLE"
 
 
-# The reasons the enrollment domain records as a REJECTED attempt (D-01); DUPLICATE is not one.
+# The reasons the enrollment domain records as a REJECTED attempt (D-01); DUPLICATE and
+# PARTICIPANT_UNAVAILABLE are not.
 RECORDABLE = (Reason.TUITION_UNPAID, Reason.PREREQ_MISSING, Reason.NO_SEATS, Reason.SCHEDULE_CONFLICT)
 
 
