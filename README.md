@@ -21,8 +21,9 @@ the domain and the use case import no framework, HTTP client or Redis client (a 
 | `commit-seat` | catalog CA-12 | last step, nothing after it to undo |
 
 A rejected gate ends `COMPENSATED` with `failedStep` and the domain `reason` (and the enrollment
-domain records the rejected attempt, D-01); a failed compensation ends `FAILED` for a person to
-decide. Every step call carries the workflow's `SERVICE_TOKEN`, `Idempotency-Key: <sagaId>:<step>`
+domain records the rejected attempt, D-01); a participant that does not answer (network,
+timeout, a 5xx after the retries) ends `COMPENSATED` with `reason: PARTICIPANT_UNAVAILABLE`, not
+recorded as a rejection (HU-RES-001); a failed compensation ends `FAILED` for a person to decide. Every step call carries the workflow's `SERVICE_TOKEN`, `Idempotency-Key: <sagaId>:<step>`
 and the caller's `X-Correlation-Id`.
 
 - Contract: `07-api/contracts/openapi/qone-workflow.yaml` (WF-01..WF-03) in `qone-docs`.
