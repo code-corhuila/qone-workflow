@@ -43,7 +43,8 @@ python -m apps.api                                 # http://localhost:8000/api/v
 Quality gates of CI (HU-PLT-005): the tests run with `pytest --cov=src --cov-fail-under=90` (the
 **coverage floor is 90 %** of `src/`, measured 90.4 % without Redis when it was set; raise it, never
 lower it), `pip-audit --skip-editable` fails on a known vulnerability, and gitleaks scans the whole
-history for secrets.
+history for secrets (`.gitleaks.toml` allowlists `tests/`, whose keys and tokens are fake
+fixtures).
 
 Without `REDIS_URL` the sagas live in memory and a restart loses them (development only; the
 log says so). At start the service resumes every saga a restart left `RUNNING`: the idempotent
